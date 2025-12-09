@@ -1,0 +1,7 @@
+; Copy this file to xlwings.conf and adjust paths for your machine
+[xlwings]
+; PYTHONPATH should point to the folder containing voltampero.py
+PYTHONPATH=C:\\path\\to\\voltampero
+; INTERPRETER can point to the bundled interpreter or your system python
+; Example using bundled interpreter (recommended):
+INTERPRETER=C:\\path\\to\\voltampero\\python\\python.exe

@@ -1,8 +1,8 @@
 """
 UNI-T UT8804E Multimeter Communication Module
-USB HID communication via CP2110
-Compatible with UT8803E protocol
-Windows 11 compatible - no admin rights needed
+
+Refactored to align with PyMeasure by introducing a lightweight HID Adapter
+and Instrument wrapper while preserving the public API used by the controller.
 """
 
 import time
@@ -16,6 +16,13 @@ try:
     HID_AVAILABLE = True
 except ImportError:
     HID_AVAILABLE = False
+
+try:
+    from pymeasure.adapters import Adapter
+    from pymeasure.instruments import Instrument
+    PYMEASURE_AVAILABLE = True
+except Exception:
+    PYMEASURE_AVAILABLE = False
 
 
 class MeasurementMode(Enum):
@@ -55,8 +62,70 @@ class MultimeterReading:
     raw_data: bytes = b""
 
 
+class _HIDAdapter(Adapter):
+    """Minimal PyMeasure Adapter for HID devices (CP2110).
+    Provides raw read/write of HID reports. Commands are bytes.
+    """
+
+    def __init__(self, vendor_id: int, product_id: int):
+        super().__init__()
+        self.vendor_id = vendor_id
+        self.product_id = product_id
+        self.device = None
+        self._connected = False
+
+    def connect(self) -> bool:
+        if not HID_AVAILABLE:
+            return False
+        try:
+            self.device = hid.device()
+            self.device.open(self.vendor_id, self.product_id)
+            self.device.set_nonblocking(1)
+            self._connected = True
+            return True
+        except Exception:
+            self.device = None
+            self._connected = False
+            return False
+
+    def disconnect(self):
+        if self.device:
+            try:
+                self.device.close()
+            except Exception:
+                pass
+        self.device = None
+        self._connected = False
+
+    def write_bytes(self, command: bytes):
+        if not self._connected or not self.device:
+            raise IOError("HID not connected")
+        # HID report with ID 0 prefix
+        self.device.write(b"\x00" + command)
+
+    def read_bytes(self, count: int = 64, **kwargs) -> bytes:
+        if not self._connected or not self.device:
+            raise IOError("HID not connected")
+        timeout = int(kwargs.get("timeout", 100))
+        data = self.device.read(count, timeout)
+        return bytes(data)
+
+
+class _UT8804EInstrument(Instrument):
+    """PyMeasure Instrument shell for UT8804E using _HIDAdapter."""
+
+    def __init__(self, adapter: _HIDAdapter):
+        super().__init__(adapter)
+
+    def write_bytes(self, data: bytes):
+        self.adapter.write_bytes(data)
+
+    def read_bytes(self, count: int = 64, **kwargs) -> bytes:
+        return self.adapter.read_bytes(count, **kwargs)
+
+
 class UNIT_UT8804E:
-    """Driver for UNI-T UT8804E Bench Multimeter"""
+    """Driver for UNI-T UT8804E Bench Multimeter (PyMeasure-backed)."""
     
     VENDOR_ID = 0x10c4   # Silicon Labs CP2110
     PRODUCT_ID = 0xea80
@@ -108,10 +177,11 @@ class UNIT_UT8804E:
     }
     
     def __init__(self):
-        self.device = None
         self.connected = False
         self.last_reading: Optional[MultimeterReading] = None
         self.device_id = ""
+        self._adapter: Optional[_HIDAdapter] = None
+        self._inst: Optional[_UT8804EInstrument] = None
         
     @staticmethod
     def find_devices() -> List[dict]:
@@ -129,40 +199,45 @@ class UNIT_UT8804E:
         if not HID_AVAILABLE:
             print("HID library not available. Install with: pip install hidapi")
             return False
-            
         try:
-            self.device = hid.device()
-            self.device.open(self.VENDOR_ID, self.PRODUCT_ID)
-            self.device.set_nonblocking(1)
+            self._adapter = _HIDAdapter(self.VENDOR_ID, self.PRODUCT_ID)
+            ok = self._adapter.connect()
+            if not ok:
+                self._adapter = None
+                self.connected = False
+                return False
+            self._inst = _UT8804EInstrument(self._adapter)
             self.connected = True
             time.sleep(0.1)
             return True
         except Exception as e:
             print(f"Multimeter connection error: {e}")
             self.connected = False
+            self._inst = None
+            self._adapter = None
             return False
     
     def disconnect(self):
         """Disconnect from the multimeter"""
-        if self.device:
+        if self._adapter:
             try:
-                self.device.close()
-            except:
+                self._adapter.disconnect()
+            except Exception:
                 pass
-        self.device = None
+        self._inst = None
+        self._adapter = None
         self.connected = False
         
     def is_connected(self) -> bool:
         """Check if connected"""
-        return self.connected and self.device is not None
+        return self.connected and self._adapter is not None
     
     def _send_command(self, cmd: bytes) -> bool:
         """Send a command to the multimeter"""
-        if not self.is_connected():
+        if not self.is_connected() or not self._inst:
             return False
         try:
-            # HID report with report ID 0
-            self.device.write(b'\x00' + cmd)
+            self._inst.write_bytes(cmd)
             return True
         except Exception as e:
             print(f"Multimeter command error: {e}")
@@ -170,11 +245,11 @@ class UNIT_UT8804E:
     
     def _read_data(self, timeout_ms: int = 100) -> Optional[bytes]:
         """Read data from the multimeter"""
-        if not self.is_connected():
+        if not self.is_connected() or not self._inst:
             return None
         try:
-            data = self.device.read(64, timeout_ms)
-            return bytes(data) if data else None
+            data = self._inst.read_bytes(64, timeout=timeout_ms)
+            return data if data else None
         except Exception as e:
             print(f"Multimeter read error: {e}")
             return None

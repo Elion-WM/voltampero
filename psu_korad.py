@@ -1,14 +1,22 @@
 """
 Korad KWR102 Power Supply Communication Module
-Serial communication using SCPI-like commands
-Windows 11 compatible - no admin rights needed
+
+Refactored to use PyMeasure for a consistent, testable driver interface.
 """
 
-import serial
-import serial.tools.list_ports
 import time
 from typing import Optional, Tuple, List
 from dataclasses import dataclass
+
+import serial
+import serial.tools.list_ports
+
+try:
+    from pymeasure.adapters import SerialAdapter
+    from pymeasure.instruments import Instrument
+    PYMEASURE_AVAILABLE = True
+except Exception:
+    PYMEASURE_AVAILABLE = False
 
 
 @dataclass
@@ -23,74 +31,94 @@ class PSUStatus:
     mode: str
 
 
+class _KoradInstrument(Instrument):
+    """PyMeasure Instrument for Korad KWR102 over serial."""
+
+    def __init__(self, port: str, baudrate: int = 115200, timeout: float = 1.0):
+        adapter = SerialAdapter(port, baudrate=baudrate, timeout=timeout)
+        super().__init__(adapter)
+
+    # Low-level helpers kept similar to the legacy driver
+    def _send(self, cmd: str) -> Optional[str]:
+        try:
+            # Korad typically does not require terminators; keep as-is
+            if '?' in cmd:
+                return self.ask(cmd).strip()
+            else:
+                self.write(cmd)
+                return ""
+        except Exception as e:
+            print(f"PSU command error: {e}")
+            return None
+
+
 class KoradKWR102:
-    """Driver for Korad KWR102 Power Supply"""
-    
+    """Wrapper driver exposing the legacy API backed by PyMeasure."""
+
     def __init__(self, port: str = "", baudrate: int = 115200, timeout: float = 1.0):
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
-        self.serial: Optional[serial.Serial] = None
+        self._inst: Optional[_KoradInstrument] = None
         self._ocp_enabled = False
         self._ovp_enabled = False
-        
+
     @staticmethod
     def list_ports() -> List[str]:
-        """List available COM ports"""
         ports = serial.tools.list_ports.comports()
         return [p.device for p in ports]
-    
+
     def connect(self, port: str = "") -> bool:
-        """Connect to the power supply"""
         if port:
             self.port = port
         if not self.port:
             return False
         try:
-            self.serial = serial.Serial(
-                port=self.port,
-                baudrate=self.baudrate,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE,
-                timeout=self.timeout
-            )
+            if not PYMEASURE_AVAILABLE:
+                # Fallback to raw serial for environments without pymeasure
+                ser = serial.Serial(
+                    port=self.port,
+                    baudrate=self.baudrate,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE,
+                    timeout=self.timeout,
+                )
+                # Wrap minimal subset inside a tiny adapter for compatibility
+                class _Fallback(_KoradInstrument):
+                    def __init__(self, ser):
+                        self.adapter = type("_A", (), {"connection": ser, "write": ser.write, "read": ser.read})()
+                        Instrument.__init__(self, self.adapter)
+                self._inst = _Fallback(ser)
+            else:
+                self._inst = _KoradInstrument(self.port, self.baudrate, self.timeout)
             time.sleep(0.1)
-            self.serial.reset_input_buffer()
-            self.serial.reset_output_buffer()
             return True
         except Exception as e:
             print(f"PSU connection error: {e}")
+            self._inst = None
             return False
-    
+
     def disconnect(self):
-        """Disconnect from the power supply"""
-        if self.serial and self.serial.is_open:
-            try:
-                self.serial.close()
-            except:
-                pass
-        self.serial = None
-            
-    def is_connected(self) -> bool:
-        """Check if connected"""
-        return self.serial is not None and self.serial.is_open
-    
-    def _send_command(self, cmd: str) -> Optional[str]:
-        """Send command and optionally read response"""
-        if not self.is_connected():
-            return None
         try:
-            self.serial.reset_input_buffer()
-            self.serial.write(cmd.encode('ascii'))
-            time.sleep(0.05)
-            if '?' in cmd:
-                response = self.serial.read(100).decode('ascii').strip()
-                return response
-            return ""
-        except Exception as e:
-            print(f"PSU command error: {e}")
+            if self._inst is not None:
+                conn = getattr(self._inst.adapter, "connection", None)
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+        finally:
+            self._inst = None
+
+    def is_connected(self) -> bool:
+        conn = getattr(self._inst.adapter, "connection", None) if self._inst else None
+        return bool(conn) and getattr(conn, "is_open", True)
+
+    def _send_command(self, cmd: str) -> Optional[str]:
+        if not self._inst:
             return None
+        return self._inst._send(cmd)
     
     def get_identification(self) -> str:
         """Get device identification string"""
