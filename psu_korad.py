@@ -62,6 +62,8 @@ class KoradKWR102:
         self._inst: Optional[_KoradInstrument] = None
         self._ocp_enabled = False
         self._ovp_enabled = False
+        import threading
+        self._lock = threading.Lock()
 
     @staticmethod
     def list_ports() -> List[str]:
@@ -128,7 +130,8 @@ class KoradKWR102:
         """Set output voltage (V)"""
         voltage = max(0, min(voltage, 60))  # Clamp to safe range
         cmd = f"VSET1:{voltage:05.2f}"
-        return self._send_command(cmd) is not None
+        with self._lock:
+            return self._send_command(cmd) is not None
     
     def get_voltage_setpoint(self) -> float:
         """Get voltage setpoint (V)"""
@@ -150,7 +153,8 @@ class KoradKWR102:
         """Set current limit (A)"""
         current = max(0, min(current, 30))  # Clamp to safe range
         cmd = f"ISET1:{current:05.3f}"
-        return self._send_command(cmd) is not None
+        with self._lock:
+            return self._send_command(cmd) is not None
     
     def get_current_setpoint(self) -> float:
         """Get current setpoint (A)"""
@@ -171,7 +175,8 @@ class KoradKWR102:
     def set_output(self, on: bool) -> bool:
         """Turn output on or off"""
         cmd = "OUT1" if on else "OUT0"
-        return self._send_command(cmd) is not None
+        with self._lock:
+            return self._send_command(cmd) is not None
     
     def output_on(self) -> bool:
         """Turn output on"""
@@ -184,7 +189,8 @@ class KoradKWR102:
     def set_ocp(self, on: bool) -> bool:
         """Turn Over Current Protection on or off"""
         cmd = "OCP1" if on else "OCP0"
-        result = self._send_command(cmd) is not None
+        with self._lock:
+            result = self._send_command(cmd) is not None
         if result:
             self._ocp_enabled = on
         return result
@@ -192,7 +198,8 @@ class KoradKWR102:
     def set_ovp(self, on: bool) -> bool:
         """Turn Over Voltage Protection on or off"""
         cmd = "OVP1" if on else "OVP0"
-        result = self._send_command(cmd) is not None
+        with self._lock:
+            result = self._send_command(cmd) is not None
         if result:
             self._ovp_enabled = on
         return result

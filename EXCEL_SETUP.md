@@ -213,8 +213,8 @@ Sub InitSimulated()
 End Sub
 
 Sub RefreshReadings()
-    ' Can be called by a timer or button
-    RunPython "from voltampero import get_controller; c=get_controller(); c.attach_excel(); r=c._capture_reading(); c._write_entry_to_excel(r) if r else None"
+    ' Drain queued log entries from Python logging thread to Excel (main-thread safe)
+    RunPython "from voltampero import va_drain_queue; va_drain_queue(200)"
 End Sub
 
 ' Auto-refresh timer (optional)
@@ -241,15 +241,13 @@ End Sub
 ## Step 6: Configure xlwings
 
 ### xlwings.conf file
-Create a file named `xlwings.conf` in the same folder as your Excel file:
+Copy `xlwings.conf.template` to `xlwings.conf` in the same folder as your Excel file, then edit paths:
 
 ```ini
 [xlwings]
-PYTHONPATH=C:\Users\User\OneDrive - ELION\Pulpit\voltampero
-INTERPRETER=python
+PYTHONPATH=C:\\path\\to\\voltampero
+INTERPRETER=C:\\path\\to\\voltampero\\python\\python.exe
 ```
-
-Adjust PYTHONPATH to your actual folder path.
 
 ### Alternative: Use xlwings addin
 1. Run in command prompt: `xlwings addin install`
@@ -276,7 +274,10 @@ Adjust PYTHONPATH to your actual folder path.
 
 ### "Module not found"
 - Make sure PYTHONPATH in xlwings.conf points to the voltampero folder
-- Install dependencies: `pip install --user pyserial hidapi xlwings`
+- Install dependencies: `pip install --user pyserial==3.5 hidapi==0.14.0.post4 xlwings==0.33.17 pymeasure==0.13.0`
+
+### PyMeasure standard
+- This project uses PyMeasure for all lab drivers to ensure consistent interfaces.
 
 ### Macros disabled
 - File > Options > Trust Center > Trust Center Settings
