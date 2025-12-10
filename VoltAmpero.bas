@@ -74,7 +74,8 @@ Sub InitSimulated()
 End Sub
 
 Sub RefreshReadings()
-    RunPython "from voltampero import get_controller; c=get_controller(); c.attach_excel(); r=c._capture_reading(); c._write_entry_to_excel(r) if r else None"
+    ' Drain up to 200 queued entries from logging thread to Excel (main thread safe)
+    RunPython "from voltampero import va_drain_queue; va_drain_queue(200)"
 End Sub
 
 ' ========== Auto-refresh timer (optional) ==========

@@ -11,6 +11,7 @@ import os
 from datetime import datetime
 from typing import Optional, List, Tuple
 from dataclasses import dataclass
+from queue import Queue
 
 try:
     import xlwings as xw
@@ -59,6 +60,8 @@ class VoltAmpero:
         self.log_interval_ms = 300
         self._log_thread: Optional[threading.Thread] = None
         self._stop_logging = threading.Event()
+        self._excel_queue: "Queue[LogEntry]" = Queue()
+        self._ui_queue: "Queue[tuple]" = Queue()  # (cycle,total,voltage,progress)
         
         # Excel integration
         self.wb: Optional[xw.Book] = None
@@ -68,6 +71,9 @@ class VoltAmpero:
         
         # Ramp state
         self._ramp_thread: Optional[threading.Thread] = None
+        
+        # Concurrency
+        self._psu_lock = threading.Lock()
         
     # ========== Connection Methods ==========
     
@@ -116,27 +122,33 @@ class VoltAmpero:
     
     def set_voltage(self, voltage: float) -> bool:
         """Set PSU output voltage"""
-        return self.psu.set_voltage(voltage)
+        with self._psu_lock:
+            return self.psu.set_voltage(voltage)
     
     def set_current(self, current: float) -> bool:
         """Set PSU current limit"""
-        return self.psu.set_current(current)
+        with self._psu_lock:
+            return self.psu.set_current(current)
     
     def output_on(self) -> bool:
         """Turn PSU output on"""
-        return self.psu.output_on()
+        with self._psu_lock:
+            return self.psu.output_on()
     
     def output_off(self) -> bool:
         """Turn PSU output off"""
-        return self.psu.output_off()
+        with self._psu_lock:
+            return self.psu.output_off()
     
     def set_ocp(self, enabled: bool) -> bool:
         """Enable/disable Over Current Protection"""
-        return self.psu.set_ocp(enabled)
+        with self._psu_lock:
+            return self.psu.set_ocp(enabled)
     
     def set_ovp(self, enabled: bool) -> bool:
         """Enable/disable Over Voltage Protection"""
-        return self.psu.set_ovp(enabled)
+        with self._psu_lock:
+            return self.psu.set_ovp(enabled)
     
     def get_psu_readings(self) -> Tuple[float, float]:
         """Get PSU voltage and current"""
@@ -194,13 +206,11 @@ class VoltAmpero:
     def _ramp_progress_callback(self, cycle: int, total_cycles: int, 
                                  voltage: float, progress_pct: float):
         """Called during ramp to update Excel"""
-        if self.control_sheet:
-            try:
-                self.control_sheet.range("RampCycle").value = f"{cycle}/{total_cycles if total_cycles > 0 else '∞'}"
-                self.control_sheet.range("RampVoltage").value = voltage
-                self.control_sheet.range("RampProgress").value = progress_pct / 100
-            except:
-                pass
+        # Enqueue UI update for main-thread drain
+        try:
+            self._ui_queue.put((cycle, total_cycles, voltage, progress_pct))
+        except Exception:
+            pass
                 
     # ========== DMM Methods ==========
     
@@ -258,7 +268,8 @@ class VoltAmpero:
                 entry = self._capture_reading()
                 if entry:
                     self.log_data.append(entry)
-                    self._write_entry_to_excel(entry)
+                    # Defer Excel writes to main thread via drain function
+                    self._excel_queue.put(entry)
             except Exception as e:
                 print(f"Logging error: {e}")
                 
@@ -325,6 +336,35 @@ class VoltAmpero:
                 self.control_sheet.range("LiveDMM").value = f"{entry.dmm_value:.4f} {entry.dmm_unit}"
         except Exception as e:
             print(f"Excel write error: {e}")
+
+    def drain_excel_queue(self, max_items: int = 200):
+        """Drain queued log entries to Excel from the main thread.
+        Call this periodically (e.g., via VBA timer)."""
+        if not self.data_sheet:
+            return
+        drained = 0
+        while not self._excel_queue.empty() and drained < max_items:
+            try:
+                entry = self._excel_queue.get_nowait()
+            except Exception:
+                break
+            self._write_entry_to_excel(entry)
+            drained += 1
+        # Drain UI updates (ramp status)
+        ui_drained = 0
+        while not self._ui_queue.empty() and ui_drained < max_items:
+            try:
+                cycle, total_cycles, voltage, progress_pct = self._ui_queue.get_nowait()
+            except Exception:
+                break
+            if self.control_sheet:
+                try:
+                    self.control_sheet.range("RampCycle").value = f"{cycle}/{total_cycles if total_cycles > 0 else '∞'}"
+                    self.control_sheet.range("RampVoltage").value = voltage
+                    self.control_sheet.range("RampProgress").value = progress_pct / 100
+                except Exception:
+                    pass
+            ui_drained += 1
     
     def export_csv(self, filepath: str) -> bool:
         """Export log data to CSV file"""
@@ -505,8 +545,10 @@ if XLWINGS_AVAILABLE:
     def va_export_csv():
         """Export data to CSV"""
         ctrl = get_controller()
+        ctrl.attach_excel()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filepath = os.path.join(os.path.dirname(ctrl.wb.fullname), f"voltampero_log_{timestamp}.csv")
+        base_dir = os.path.dirname(ctrl.wb.fullname) if getattr(ctrl, 'wb', None) else os.getcwd()
+        filepath = os.path.join(base_dir, f"voltampero_log_{timestamp}.csv")
         if ctrl.export_csv(filepath):
             ctrl.control_sheet.range("ExportStatus").value = f"Exported: {filepath}"
         else:
@@ -517,6 +559,13 @@ if XLWINGS_AVAILABLE:
         """Clear log data"""
         ctrl = get_controller()
         ctrl.clear_log()
+
+    @xw.sub
+    def va_drain_queue(max_items: int = 200):
+        """Drain queued log entries to Excel (call from VBA timer)."""
+        ctrl = get_controller()
+        ctrl.attach_excel()
+        ctrl.drain_excel_queue(int(max_items))
     
     @xw.sub
     def va_start_ramp():

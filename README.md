@@ -19,6 +19,8 @@ Control **Korad KWR102** power supply and **UNI-T UT8804E** multimeter with Exce
 - Korad KWR102 USB cable
 - UNI-T UT8804E USB cable
 
+This project uses PyMeasure as the standard framework for lab equipment drivers to ensure a consistent interface and easy integration into the Mainframe.
+
 ## Installation (No Admin Required)
 
 ### 1. Install Python from Microsoft Store
@@ -32,7 +34,7 @@ Control **Korad KWR102** power supply and **UNI-T UT8804E** multimeter with Exce
 Open Command Prompt (Win+R, type `cmd`, Enter):
 
 ```cmd
-pip install --user pyserial hidapi xlwings
+pip install --user pyserial==3.5 hidapi==0.14.0.post4 xlwings==0.33.17 pymeasure==0.13.0
 ```
 
 ### 3. Install xlwings Excel Add-in
@@ -101,7 +103,8 @@ Click "Start Ramp" to begin.
 voltampero/
 ├── README.md              # This file
 ├── EXCEL_SETUP.md         # Excel configuration guide
-├── requirements.txt       # Python dependencies
+├── requirements.txt       # Pinned Python dependencies (incl. PyMeasure)
+├── xlwings.conf.template  # Template; copy to xlwings.conf and adjust paths
 ├── psu_korad.py          # Korad KWR102 driver
 ├── multimeter_unit.py    # UNI-T UT8804E driver
 ├── voltampero.py         # Main controller
