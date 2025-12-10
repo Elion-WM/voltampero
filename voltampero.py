@@ -61,6 +61,7 @@ class VoltAmpero:
         self._log_thread: Optional[threading.Thread] = None
         self._stop_logging = threading.Event()
         self._excel_queue: "Queue[LogEntry]" = Queue()
+        self._ui_queue: "Queue[tuple]" = Queue()  # (cycle,total,voltage,progress)
         
         # Excel integration
         self.wb: Optional[xw.Book] = None
@@ -205,13 +206,11 @@ class VoltAmpero:
     def _ramp_progress_callback(self, cycle: int, total_cycles: int, 
                                  voltage: float, progress_pct: float):
         """Called during ramp to update Excel"""
-        if self.control_sheet:
-            try:
-                self.control_sheet.range("RampCycle").value = f"{cycle}/{total_cycles if total_cycles > 0 else '∞'}"
-                self.control_sheet.range("RampVoltage").value = voltage
-                self.control_sheet.range("RampProgress").value = progress_pct / 100
-            except:
-                pass
+        # Enqueue UI update for main-thread drain
+        try:
+            self._ui_queue.put((cycle, total_cycles, voltage, progress_pct))
+        except Exception:
+            pass
                 
     # ========== DMM Methods ==========
     
@@ -351,6 +350,21 @@ class VoltAmpero:
                 break
             self._write_entry_to_excel(entry)
             drained += 1
+        # Drain UI updates (ramp status)
+        ui_drained = 0
+        while not self._ui_queue.empty() and ui_drained < max_items:
+            try:
+                cycle, total_cycles, voltage, progress_pct = self._ui_queue.get_nowait()
+            except Exception:
+                break
+            if self.control_sheet:
+                try:
+                    self.control_sheet.range("RampCycle").value = f"{cycle}/{total_cycles if total_cycles > 0 else '∞'}"
+                    self.control_sheet.range("RampVoltage").value = voltage
+                    self.control_sheet.range("RampProgress").value = progress_pct / 100
+                except Exception:
+                    pass
+            ui_drained += 1
     
     def export_csv(self, filepath: str) -> bool:
         """Export log data to CSV file"""
