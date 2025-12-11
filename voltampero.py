@@ -645,8 +645,8 @@ if XLWINGS_AVAILABLE:
     def va_disconnect_all():
         """Disconnect all devices"""
         ctrl = get_controller()
-        ctrl.disconnect_all()
         ctrl.attach_excel()
+        ctrl.disconnect_all()
         try:
             if ctrl.control_sheet:
                 ctrl.control_sheet.range("LiveVoltage").value = 0
