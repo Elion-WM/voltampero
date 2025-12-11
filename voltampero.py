@@ -427,6 +427,18 @@ class VoltAmpero:
             print(f"Excel attach error: {e}")
             return False
     
+    def update_live_display(self):
+        """Update live readout cells without requiring logging."""
+        if not self.control_sheet:
+            return
+        try:
+            v,a = self.get_psu_readings()
+            self.control_sheet.Range("LiveVoltage").Value = v
+            self.control_sheet.Range("LiveCurrent").Value = a
+            self.control_sheet.Range("LiveDMM").Value = self.get_dmm_display()
+        except Exception:
+            pass
+
     def _update_excel_status(self, component: str, status: str):
         """Update status indicator in Excel"""
         if self.control_sheet:
@@ -499,24 +511,32 @@ if XLWINGS_AVAILABLE:
         """Set PSU voltage"""
         ctrl = get_controller()
         ctrl.set_voltage(voltage)
+        ctrl.attach_excel()
+        ctrl.update_live_display()
     
     @xw.sub
     def va_set_current(current: float):
         """Set PSU current limit"""
         ctrl = get_controller()
         ctrl.set_current(current)
+        ctrl.attach_excel()
+        ctrl.update_live_display()
     
     @xw.sub
     def va_output_on():
         """Turn PSU output on"""
         ctrl = get_controller()
         ctrl.output_on()
+        ctrl.attach_excel()
+        ctrl.update_live_display()
     
     @xw.sub
     def va_output_off():
         """Turn PSU output off"""
         ctrl = get_controller()
         ctrl.output_off()
+        ctrl.attach_excel()
+        ctrl.update_live_display()
     
     @xw.sub
     def va_set_ocp(enabled: bool):
@@ -604,10 +624,24 @@ if XLWINGS_AVAILABLE:
         ctrl.resume_ramp()
     
     @xw.sub
+    def va_update_live():
+        ctrl = get_controller()
+        ctrl.attach_excel()
+        ctrl.update_live_display()
+
+    @xw.sub
     def va_disconnect_all():
         """Disconnect all devices"""
         ctrl = get_controller()
         ctrl.disconnect_all()
+        ctrl.attach_excel()
+        try:
+            if ctrl.control_sheet:
+                ctrl.control_sheet.range("LiveVoltage").value = 0
+                ctrl.control_sheet.range("LiveCurrent").value = 0
+                ctrl.control_sheet.range("LiveDMM").value = "--- ---"
+        except Exception:
+            pass
     
     @xw.sub
     def va_init_simulated():
@@ -658,3 +692,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
