@@ -124,12 +124,24 @@ class VoltAmpero:
     def set_voltage(self, voltage: float) -> bool:
         """Set PSU output voltage"""
         with self._psu_lock:
-            return self.psu.set_voltage(voltage)
+            ok = self.psu.set_voltage(voltage)
+        try:
+            if ok and self.control_sheet is not None:
+                self.update_live_display()
+        except Exception:
+            pass
+        return ok
     
     def set_current(self, current: float) -> bool:
         """Set PSU current limit"""
         with self._psu_lock:
-            return self.psu.set_current(current)
+            ok = self.psu.set_current(current)
+        try:
+            if ok and self.control_sheet is not None:
+                self.update_live_display()
+        except Exception:
+            pass
+        return ok
     
     def output_on(self) -> bool:
         """Turn PSU output on"""
