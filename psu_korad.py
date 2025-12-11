@@ -48,7 +48,7 @@ class _KoradInstrument(Instrument):
                 conn.reset_input_buffer()
             except Exception:
                 pass
-            to_send = (cmd + '').encode('ascii')
+            to_send = (cmd + '\r').encode('ascii')
             conn.write(to_send)
             conn.flush()
             if '?' in cmd:
@@ -63,7 +63,6 @@ class _KoradInstrument(Instrument):
         except Exception as e:
             print(f"PSU command error: {e}")
             return None
-
 
 
 class KoradKWR102:
@@ -468,4 +467,6 @@ class SimulatedPSU:
         
     def get_readings(self) -> Tuple[float, float]:
         return (self.get_output_voltage(), self.get_output_current())
+
+
 
