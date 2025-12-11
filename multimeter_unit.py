@@ -1,4 +1,4 @@
-"""
+﻿"""
 UNI-T UT8804E Multimeter Communication Module
 
 Refactored to align with PyMeasure by introducing a lightweight HID Adapter
@@ -28,18 +28,18 @@ except Exception:
 class MeasurementMode(Enum):
     DC_VOLTAGE = "DC V"
     AC_VOLTAGE = "AC V"
-    DC_CURRENT_UA = "DC µA"
+    DC_CURRENT_UA = "DC ÂµA"
     DC_CURRENT_MA = "DC mA"
     DC_CURRENT_A = "DC A"
-    AC_CURRENT_UA = "AC µA"
+    AC_CURRENT_UA = "AC ÂµA"
     AC_CURRENT_MA = "AC mA"
     AC_CURRENT_A = "AC A"
-    RESISTANCE = "Ω"
+    RESISTANCE = "Î©"
     CAPACITANCE = "F"
     FREQUENCY = "Hz"
     DUTY_CYCLE = "%"
-    TEMPERATURE_C = "°C"
-    TEMPERATURE_F = "°F"
+    TEMPERATURE_C = "Â°C"
+    TEMPERATURE_F = "Â°F"
     DIODE = "Diode"
     CONTINUITY = "Cont"
     HFE = "hFE"
@@ -115,7 +115,7 @@ class _UT8804EInstrument(Instrument):
     """PyMeasure Instrument shell for UT8804E using _HIDAdapter."""
 
     def __init__(self, adapter: _HIDAdapter):
-        super().__init__(adapter)
+        super().__init__(adapter, name="UT8804E")
 
     def write_bytes(self, data: bytes):
         self.adapter.write_bytes(data)
@@ -149,20 +149,20 @@ class UNIT_UT8804E:
     MODE_MAP = {
         0x00: (MeasurementMode.DC_VOLTAGE, "V"),
         0x01: (MeasurementMode.AC_VOLTAGE, "V"),
-        0x02: (MeasurementMode.DC_CURRENT_UA, "µA"),
+        0x02: (MeasurementMode.DC_CURRENT_UA, "ÂµA"),
         0x03: (MeasurementMode.DC_CURRENT_MA, "mA"),
         0x04: (MeasurementMode.DC_CURRENT_A, "A"),
-        0x05: (MeasurementMode.AC_CURRENT_UA, "µA"),
+        0x05: (MeasurementMode.AC_CURRENT_UA, "ÂµA"),
         0x06: (MeasurementMode.AC_CURRENT_MA, "mA"),
         0x07: (MeasurementMode.AC_CURRENT_A, "A"),
-        0x08: (MeasurementMode.RESISTANCE, "Ω"),
-        0x09: (MeasurementMode.CONTINUITY, "Ω"),
+        0x08: (MeasurementMode.RESISTANCE, "Î©"),
+        0x09: (MeasurementMode.CONTINUITY, "Î©"),
         0x0A: (MeasurementMode.DIODE, "V"),
         0x0B: (MeasurementMode.CAPACITANCE, "F"),
         0x0C: (MeasurementMode.FREQUENCY, "Hz"),
         0x0D: (MeasurementMode.DUTY_CYCLE, "%"),
-        0x0E: (MeasurementMode.TEMPERATURE_C, "°C"),
-        0x0F: (MeasurementMode.TEMPERATURE_F, "°F"),
+        0x0E: (MeasurementMode.TEMPERATURE_C, "Â°C"),
+        0x0F: (MeasurementMode.TEMPERATURE_F, "Â°F"),
         0x10: (MeasurementMode.HFE, ""),
     }
     
@@ -170,7 +170,7 @@ class UNIT_UT8804E:
     RANGE_PREFIX = {
         0: "",
         1: "m",   # milli
-        2: "µ",   # micro
+        2: "Âµ",   # micro
         3: "n",   # nano
         4: "k",   # kilo
         5: "M",   # mega
@@ -464,3 +464,4 @@ class SimulatedMultimeter:
     def set_base_value(self, value: float):
         """For simulation: set the base value"""
         self._base_value = value
+

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Korad KWR102 Power Supply Communication Module
 
 Refactored to use PyMeasure for a consistent, testable driver interface.
@@ -36,7 +36,7 @@ class _KoradInstrument(Instrument):
 
     def __init__(self, port: str, baudrate: int = 115200, timeout: float = 1.0):
         adapter = SerialAdapter(port, baudrate=baudrate, timeout=timeout)
-        super().__init__(adapter)
+        super().__init__(adapter, name="Korad KWR102")
 
     # Low-level helpers kept similar to the legacy driver
     def _send(self, cmd: str) -> Optional[str]:
@@ -90,7 +90,7 @@ class KoradKWR102:
                 class _Fallback(_KoradInstrument):
                     def __init__(self, ser):
                         self.adapter = type("_A", (), {"connection": ser, "write": ser.write, "read": ser.read})()
-                        Instrument.__init__(self, self.adapter)
+                        Instrument.__init__(self, self.adapter, name="Korad KWR102")
                 self._inst = _Fallback(ser)
             else:
                 self._inst = _KoradInstrument(self.port, self.baudrate, self.timeout)
@@ -454,3 +454,4 @@ class SimulatedPSU:
         
     def get_readings(self) -> Tuple[float, float]:
         return (self.get_output_voltage(), self.get_output_current())
+
