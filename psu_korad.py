@@ -34,28 +34,42 @@ class PSUStatus:
 class _KoradInstrument(Instrument):
     """PyMeasure Instrument for Korad KWR102 over serial."""
 
-    def __init__(self, port: str, baudrate: int = 115200, timeout: float = 1.0):
+    def __init__(self, port: str, baudrate: int = 9600, timeout: float = 1.0):
         adapter = SerialAdapter(port, baudrate=baudrate, timeout=timeout)
         super().__init__(adapter, name="Korad KWR102")
 
     # Low-level helpers kept similar to the legacy driver
     def _send(self, cmd: str) -> Optional[str]:
         try:
-            # Korad typically does not require terminators; keep as-is
+            conn = getattr(self.adapter, 'connection', None)
+            if conn is None:
+                return None
+            try:
+                conn.reset_input_buffer()
+            except Exception:
+                pass
+            to_send = (cmd + '').encode('ascii')
+            conn.write(to_send)
+            conn.flush()
             if '?' in cmd:
-                return self.ask(cmd).strip()
+                try:
+                    resp = conn.readline().decode('ascii', errors='ignore').strip()
+                except Exception:
+                    import time as _t; _t.sleep(0.1)
+                    resp = conn.read(64).decode('ascii', errors='ignore').strip()
+                return resp
             else:
-                self.write(cmd)
-                return ""
+                return ''
         except Exception as e:
             print(f"PSU command error: {e}")
             return None
 
 
+
 class KoradKWR102:
     """Wrapper driver exposing the legacy API backed by PyMeasure."""
 
-    def __init__(self, port: str = "", baudrate: int = 115200, timeout: float = 1.0):
+    def __init__(self, port: str = "", baudrate: int = 9600, timeout: float = 1.0):
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
@@ -129,13 +143,13 @@ class KoradKWR102:
     def set_voltage(self, voltage: float) -> bool:
         """Set output voltage (V)"""
         voltage = max(0, min(voltage, 60))  # Clamp to safe range
-        cmd = f"VSET1:{voltage:05.2f}"
+        cmd = f"VSET:{voltage:05.2f}"
         with self._lock:
             return self._send_command(cmd) is not None
     
     def get_voltage_setpoint(self) -> float:
         """Get voltage setpoint (V)"""
-        response = self._send_command("VSET1?")
+        response = self._send_command("VSET?")
         try:
             return float(response) if response else 0.0
         except ValueError:
@@ -143,7 +157,7 @@ class KoradKWR102:
     
     def get_output_voltage(self) -> float:
         """Get actual output voltage (V)"""
-        response = self._send_command("VOUT1?")
+        response = self._send_command("VOUT?")
         try:
             return float(response) if response else 0.0
         except ValueError:
@@ -152,13 +166,13 @@ class KoradKWR102:
     def set_current(self, current: float) -> bool:
         """Set current limit (A)"""
         current = max(0, min(current, 30))  # Clamp to safe range
-        cmd = f"ISET1:{current:05.3f}"
+        cmd = f"ISET:{current:05.3f}"
         with self._lock:
             return self._send_command(cmd) is not None
     
     def get_current_setpoint(self) -> float:
         """Get current setpoint (A)"""
-        response = self._send_command("ISET1?")
+        response = self._send_command("ISET?")
         try:
             return float(response) if response else 0.0
         except ValueError:
@@ -166,7 +180,7 @@ class KoradKWR102:
     
     def get_output_current(self) -> float:
         """Get actual output current (A)"""
-        response = self._send_command("IOUT1?")
+        response = self._send_command("IOUT?")
         try:
             return float(response) if response else 0.0
         except ValueError:
