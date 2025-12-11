@@ -1,4 +1,4 @@
-# Excel Workbook Setup Guide for VoltAmpero
+﻿# Excel Workbook Setup Guide for VoltAmpero
 
 ## Step 1: Create New Excel Workbook
 
@@ -48,12 +48,12 @@ Go to **Formulas > Name Manager** and create these named ranges:
 
 ```
 Row 1: [Title] VoltAmpero - Lab Instrument Control
-Row 2: ─────────────────────────────────────────────
+Row 2: â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Row 3: PSU Port:     [B3: COM3]      Status: [D3: Disconnected]
 Row 4: DMM:          [auto-detect]   Status: [D4: Disconnected]
 Row 5: Logging:                      Status: [D5: Stopped]
 Row 6: Ramp:                         Status: [D6: Stopped]
-Row 7: ─────────────────────────────────────────────
+Row 7: â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Row 8: Log Interval (ms): [B8: 300]
 Row 9:
 Row 10: === LIVE READINGS ===
@@ -208,7 +208,7 @@ End Sub
 
 Sub InitSimulated()
     ' Initialize with simulated devices for testing
-    RunPython "from voltampero import va_init_simulated; va_init_simulated()"
+    RunPython "import voltampero; voltampero.va_init_simulated()"
     MsgBox "Simulated mode initialized. PSU and DMM connected.", vbInformation
 End Sub
 

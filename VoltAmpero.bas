@@ -69,7 +69,7 @@ Sub ClearData()
 End Sub
 
 Sub InitSimulated()
-    RunPython "from voltampero import va_init_simulated; va_init_simulated()"
+    RunPython "import voltampero; voltampero.va_init_simulated()"
     MsgBox "Simulated mode initialized. PSU and DMM connected.", vbInformation
 End Sub
 
@@ -346,3 +346,4 @@ Sub AddButtons()
     
     MsgBox "Buttons added successfully!", vbInformation
 End Sub
+

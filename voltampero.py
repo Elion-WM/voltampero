@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """
 VoltAmpero - Lab Instrument Control Software
 Main controller with Excel/xlwings integration
@@ -359,7 +360,7 @@ class VoltAmpero:
                 break
             if self.control_sheet:
                 try:
-                    self.control_sheet.range("RampCycle").value = f"{cycle}/{total_cycles if total_cycles > 0 else '∞'}"
+                    self.control_sheet.range("RampCycle").value = f"{cycle}/{total_cycles if total_cycles > 0 else 'inf'}"
                     self.control_sheet.range("RampVoltage").value = voltage
                     self.control_sheet.range("RampProgress").value = progress_pct / 100
                 except Exception:
