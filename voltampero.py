@@ -587,6 +587,23 @@ if XLWINGS_AVAILABLE:
         else:
             ctrl.control_sheet.range("ExportStatus").value = "Export failed"
     
+    
+    @xw.sub
+    def va_debug_psu_status():
+        """Show PSU ID and setpoint in ExportStatus cell"""
+        ctrl = get_controller()
+        ctrl.attach_excel()
+        try:
+            ident = ctrl.psu.get_identification()
+        except Exception as e:
+            ident = f"IDN error: {e}"
+        try:
+            vset = ctrl.psu.get_voltage_setpoint()
+        except Exception as e:
+            vset = f"VSET? error: {e}"
+        if ctrl.control_sheet:
+            ctrl.control_sheet.range("ExportStatus").value = f"PSU: {ident} | VSET: {vset}"
+
     @xw.sub
     def va_clear_data():
         """Clear log data"""
