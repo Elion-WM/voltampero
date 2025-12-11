@@ -1,4 +1,4 @@
-Attribute VB_Name = "VoltAmpero"
+Attribute VB_Name = "Module1"
 
 Option Explicit
 
@@ -695,6 +695,7 @@ Sub AddButtons()
     MsgBox "Buttons added successfully!", vbInformation
 
 End Sub
+
 
 
 
