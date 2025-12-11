@@ -187,7 +187,7 @@ class KoradKWR102:
     
     def set_output(self, on: bool) -> bool:
         """Turn output on or off"""
-        cmd = "OUT1" if on else "OUT0"
+        cmd = "OUT:1" if on else "OUT:0"
         with self._lock:
             return self._send_command(cmd) is not None
     
@@ -467,6 +467,7 @@ class SimulatedPSU:
         
     def get_readings(self) -> Tuple[float, float]:
         return (self.get_output_voltage(), self.get_output_current())
+
 
 
 
