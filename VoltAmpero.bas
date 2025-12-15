@@ -68,23 +68,7 @@ End Sub
 
 
 
-Sub ApplySettings()
-
-    Dim voltage As Double, current As Double, ocp As Boolean
-
-    voltage = Range("SetVoltage").Value
-
-    current = Range("SetCurrent").Value
-
-    ocp = Range("OCPEnabled").Value
-
-    
-
-    RunPython "from voltampero import get_controller; c=get_controller(); c.set_voltage(" & voltage & "); c.set_current(" & current & "); c.set_ocp(" & IIf(ocp, "True", "False") & ")"
-
-    RunPython "from voltampero import va_update_live; va_update_live()"
-
-End Sub
+Sub ApplySettings()\r\n\r\n    RunPython "from voltampero import va_apply_settings; va_apply_settings()"\r\n\r\nEnd Sub
 
 
 
@@ -695,6 +679,7 @@ Sub AddButtons()
     MsgBox "Buttons added successfully!", vbInformation
 
 End Sub
+
 
 
 
