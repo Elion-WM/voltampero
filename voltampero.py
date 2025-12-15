@@ -722,3 +722,69 @@ def main():
 if __name__ == "__main__":
     main()
 
+# --- Excel wrapper overrides to ensure auto-connect and sheet-driven settings ---
+try:
+    import xlwings as xw  # ensure decorator available
+    @xw.sub
+    def va_apply_settings():
+        ctrl = get_controller()
+        ctrl.attach_excel()
+        try:
+            port = str(ctrl.control_sheet.range("PSUPort").value or "").strip()
+        except Exception:
+            port = ""
+        try:
+            if hasattr(ctrl, 'psu') and not ctrl.psu.is_connected() and port:
+                ctrl.connect_psu(port)
+        except Exception:
+            pass
+        try:
+            v = float(ctrl.control_sheet.range("SetVoltage").value or 0)
+        except Exception:
+            v = 0.0
+        try:
+            c = float(ctrl.control_sheet.range("SetCurrent").value or 0)
+        except Exception:
+            c = 0.0
+        try:
+            ocp = bool(ctrl.control_sheet.range("OCPEnabled").value)
+        except Exception:
+            ocp = False
+        ctrl.set_voltage(v)
+        ctrl.set_current(c)
+        ctrl.set_ocp(ocp)
+        ctrl.update_live_display()
+
+    @xw.sub
+    def va_output_on():
+        ctrl = get_controller()
+        ctrl.attach_excel()
+        try:
+            port = str(ctrl.control_sheet.range("PSUPort").value or "").strip()
+        except Exception:
+            port = ""
+        try:
+            if hasattr(ctrl, 'psu') and not ctrl.psu.is_connected() and port:
+                ctrl.connect_psu(port)
+        except Exception:
+            pass
+        ctrl.output_on()
+        ctrl.update_live_display()
+
+    @xw.sub
+    def va_output_off():
+        ctrl = get_controller()
+        ctrl.attach_excel()
+        try:
+            port = str(ctrl.control_sheet.range("PSUPort").value or "").strip()
+        except Exception:
+            port = ""
+        try:
+            if hasattr(ctrl, 'psu') and not ctrl.psu.is_connected() and port:
+                ctrl.connect_psu(port)
+        except Exception:
+            pass
+        ctrl.output_off()
+        ctrl.update_live_display()
+except Exception:
+    pass
