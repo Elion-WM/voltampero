@@ -140,9 +140,9 @@ End Sub
 
 Sub RefreshReadings()
 
-    ' Drain up to 200 queued entries from logging thread to Excel (main thread safe)
-
+    ' Drain up to 200 queued entries from logging thread (and update live once)
     RunPython "from voltampero import va_drain_queue; va_drain_queue(200)"
+    RunPython "from voltampero import va_update_live; va_update_live()"
 
 End Sub
 
@@ -679,6 +679,7 @@ Sub AddButtons()
     MsgBox "Buttons added successfully!", vbInformation
 
 End Sub
+
 
 
 
