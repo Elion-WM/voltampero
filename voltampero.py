@@ -253,14 +253,15 @@ class VoltAmpero:
         self.logging_active = True
         self._excel_update_row = 2
         
-        # Clear previous data in Excel
+        # Clear previous data in Excel (preserve headers in Row 1)
         if self.data_sheet:
             try:
-                last_row = self.data_sheet.range("A1").end('down').row
-                if last_row > 1:
-                    self.data_sheet.range(f"A2:I{last_row}").clear_contents()
-            except:
-                pass
+                # clear_contents on the potentially huge range A2:I<max>
+                # Using expand or used_range is safer than end('down')
+                # We'll just clear a large range to be sure, starting from A2
+                self.data_sheet.range("A2:I1048576").clear_contents()
+            except Exception as e:
+                print(f"Excel clear error: {e}")
         
         self._log_thread = threading.Thread(target=self._logging_loop, daemon=True)
         self._log_thread.start()
@@ -329,6 +330,10 @@ class VoltAmpero:
             return
         try:
             row = self._excel_update_row
+            if row < 2: 
+                row = 2  # Safety net to protect headers
+                self._excel_update_row = 2
+                
             self.data_sheet.range(f"A{row}").value = [
                 entry.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
                 entry.elapsed_s,
@@ -444,12 +449,29 @@ class VoltAmpero:
         if not self.control_sheet:
             return
         try:
-            v,a = self.get_psu_readings()
-            self.control_sheet.Range("LiveVoltage").Value = v
-            self.control_sheet.Range("LiveCurrent").Value = a
-            self.control_sheet.Range("LiveDMM").Value = self.get_dmm_display()
-        except Exception:
-            pass
+            v, a = self.get_psu_readings()
+            try:
+                self.control_sheet.range("LiveVoltage").value = v
+                self.control_sheet.range("LiveCurrent").value = a
+            except Exception:
+                try:
+                    self.wb.names['LiveVoltage'].refers_to_range.value = v
+                    self.wb.names['LiveCurrent'].refers_to_range.value = a
+                except Exception:
+                    pass
+            try:
+                self.control_sheet.range("LiveDMM").value = self.get_dmm_display()
+            except Exception:
+                pass
+            try:
+                self.control_sheet.range("ExportStatus").value = f"Live v={v} a={a}"
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                self.control_sheet.range("ExportStatus").value = f"Live error: {e}"
+            except Exception:
+                pass
 
     def _update_excel_status(self, component: str, status: str):
         """Update status indicator in Excel"""
@@ -653,10 +675,29 @@ if XLWINGS_AVAILABLE:
         ctrl.resume_ramp()
     
     @xw.sub
-    def va_update_live():
-        ctrl = get_controller()
-        ctrl.attach_excel()
-        ctrl.update_live_display()
+def va_update_live():
+    ctrl = get_controller()
+    ctrl.attach_excel()
+    try:
+        v, a = ctrl.get_psu_readings()
+        if ctrl.control_sheet is not None:
+            try:
+                ctrl.control_sheet.range("LiveVoltage").value = v
+                ctrl.control_sheet.range("LiveCurrent").value = a
+                try:
+                    d = ctrl.get_dmm_display()
+                except Exception:
+                    d = ""
+                ctrl.control_sheet.range("LiveDMM").value = d
+                ctrl.control_sheet.range("ExportStatus").value = f"Live v={v} a={a}"
+            except Exception as e:
+                ctrl.control_sheet.range("ExportStatus").value = f"Live write error: {e}"
+    except Exception as e:
+        try:
+            ctrl.control_sheet.range("ExportStatus").value = f"Live error: {e}"
+        except Exception:
+            pass
+
 
     @xw.sub
     def va_disconnect_all():

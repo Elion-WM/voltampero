@@ -75,6 +75,7 @@ Sub ApplySettings()\r\n\r\n    RunPython "from voltampero import va_apply_settin
 Sub StartLogging()
 
     RunPython "from voltampero import va_start_logging; va_start_logging()"
+    StartAutoRefresh
 
 End Sub
 
@@ -83,6 +84,7 @@ End Sub
 Sub StopLogging()
 
     RunPython "from voltampero import va_stop_logging; va_stop_logging()"
+    StopAutoRefresh
 
 End Sub
 

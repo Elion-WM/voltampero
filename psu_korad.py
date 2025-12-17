@@ -11,6 +11,18 @@ from dataclasses import dataclass
 import serial
 import serial.tools.list_ports
 
+import re
+
+def _parse_float(resp: str) -> float:
+    try:
+        if resp is None:
+            return 0.0
+        resp = resp.strip()
+        m = re.search(r'[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?', resp)
+        return float(m.group(0)) if m else 0.0
+    except Exception:
+        return 0.0
+
 try:
     from pymeasure.adapters import SerialAdapter
     from pymeasure.instruments import Instrument
@@ -76,7 +88,7 @@ class KoradKWR102:
         self._ocp_enabled = False
         self._ovp_enabled = False
         import threading
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     @staticmethod
     def list_ports() -> List[str]:
@@ -137,7 +149,8 @@ class KoradKWR102:
     
     def get_identification(self) -> str:
         """Get device identification string"""
-        return self._send_command("*IDN?") or "Unknown"
+        with self._lock:
+            return self._send_command("*IDN?") or "Unknown"
     
     def set_voltage(self, voltage: float) -> bool:
         """Set output voltage (V)"""
@@ -148,17 +161,19 @@ class KoradKWR102:
     
     def get_voltage_setpoint(self) -> float:
         """Get voltage setpoint (V)"""
-        response = self._send_command("VSET?")
+        with self._lock:
+            response = self._send_command("VSET?")
         try:
-            return float(response) if response else 0.0
+            return _parse_float(response)
         except ValueError:
             return 0.0
     
     def get_output_voltage(self) -> float:
         """Get actual output voltage (V)"""
-        response = self._send_command("VOUT?")
+        with self._lock:
+            response = self._send_command("VOUT?")
         try:
-            return float(response) if response else 0.0
+            return _parse_float(response)
         except ValueError:
             return 0.0
     
@@ -171,17 +186,19 @@ class KoradKWR102:
     
     def get_current_setpoint(self) -> float:
         """Get current setpoint (A)"""
-        response = self._send_command("ISET?")
+        with self._lock:
+            response = self._send_command("ISET?")
         try:
-            return float(response) if response else 0.0
+            return _parse_float(response)
         except ValueError:
             return 0.0
     
     def get_output_current(self) -> float:
         """Get actual output current (A)"""
-        response = self._send_command("IOUT?")
+        with self._lock:
+            response = self._send_command("IOUT?")
         try:
-            return float(response) if response else 0.0
+            return _parse_float(response)
         except ValueError:
             return 0.0
     
@@ -219,7 +236,8 @@ class KoradKWR102:
     
     def get_status(self) -> PSUStatus:
         """Get full status of the power supply"""
-        status_response = self._send_command("STATUS?")
+        with self._lock:
+            status_response = self._send_command("STATUS?")
         
         output_on = False
         mode = "CV"
@@ -232,6 +250,7 @@ class KoradKWR102:
             except:
                 pass
         
+        # Note: These getters will also acquire the lock (RLock allows re-entry)
         return PSUStatus(
             voltage=self.get_output_voltage(),
             current=self.get_output_current(),
