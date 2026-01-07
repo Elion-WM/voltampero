@@ -142,13 +142,81 @@ This runs a test with simulated devices.
 ## Communication Protocols
 
 ### Korad KWR102 (Serial)
-- Baud: 115200, 8N1
-- Commands: VSET1:xx.xx, ISET1:x.xxx, OUT1/0, OCP1/0
+- Baud: 9600, 8N1
+- Commands: `VSET:xx.xx`, `ISET:x.xxx`, `OUT1`/`OUT0`, `OCP1`/`OCP0`
+- Query: `*IDN?`, `VSET?`, `ISET?`, `VOUT?`, `IOUT?`, `STATUS?`
 
 ### UNI-T UT8804E (USB HID)
-- Vendor ID: 0x10c4 (Silicon Labs CP2110)
-- Product ID: 0xea80
-- Streams data at ~3 readings/sec
+- USB HID via CP2110 USB-to-UART bridge
+- Vendor ID: 0x10C4 (Silicon Labs)
+- Product ID: 0xEA80
+- UART: 9600 baud, 8N1
+
+#### Connection Sequence
+1. Enable UART: Send Feature Report 0x41 with value 0x01
+2. Configure UART: Send Feature Report 0x50 (9600 baud, 8N1)
+3. Send init command: `abcd040005010a00` (starts data streaming)
+4. Read data continuously from HID interrupt endpoint
+
+#### Packet Format
+```
+Offset  Size  Description
+------  ----  -----------
+0-1     2     Header: 0xAB 0xCD
+2       1     Packet type (0x21)
+3       1     Reserved (0x00)
+4-5     2     Mode/Range (0x02 0x08 = DC Voltage)
+6-9     4     Flags
+10-13   4     Value: IEEE 754 float, little-endian, NEGATED (use abs())
+14+     ...   Additional data
+```
+
+#### Mode Bytes (offset 4-5)
+| Byte 4 | Byte 5 | Mode |
+|--------|--------|------|
+| 0x02   | 0x08   | DC Voltage |
+| 0x02   | 0x00   | DC Voltage |
+| 0x03   | -      | AC Voltage |
+| 0x04   | -      | DC Current mA |
+| 0x08   | -      | Resistance |
+
+## Timing Characteristics
+
+### PSU Response Time
+Based on voltage sweep testing with continuous DMM monitoring:
+
+| Transition | Settle Time |
+|------------|-------------|
+| Initial → 5V | ~464ms |
+| 5V → 10V | ~761ms |
+| 10V → 15V | ~939ms |
+| 15V → 10V | ~643ms |
+| 10V → 5V | ~838ms |
+| 5V → 18V | ~733ms |
+| 18V → 8V | ~887ms |
+
+**Key Findings:**
+- **Transition detection**: 130-155ms (DMM detects voltage change)
+- **Typical settle time**: 600-950ms (PSU reaches stable output)
+- **Recommended delay**: **1 second** after voltage change for reliable readings
+- **DMM sampling rate**: ~3 readings/second
+
+### Measurement Accuracy
+Voltage sweep test results (PSU set vs DMM reading):
+
+| PSU Setting | DMM Reading | Error |
+|-------------|-------------|-------|
+| 5.00V | 5.000V | 0.000V |
+| 6.00V | 6.001V | +0.001V |
+| 7.00V | 7.000V | 0.000V |
+| 8.00V | 8.000V | 0.000V |
+| 9.00V | 8.997V | -0.003V |
+| 10.00V | 9.998V | -0.002V |
+| 12.00V | 11.998V | -0.002V |
+| 15.00V | 15.000V | 0.000V |
+| 18.00V | 17.997V | -0.003V |
+
+**Accuracy**: Within ±0.003V across 5-18V range
 
 ## License
 

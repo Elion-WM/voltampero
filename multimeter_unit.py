@@ -135,12 +135,73 @@ class UNIT_UT8804E:
             self.device.open(self.VENDOR_ID, self.PRODUCT_ID)
             self.device.set_nonblocking(1)
             self.connected = True
-            time.sleep(0.1)
+            
+            # Initialize CP2110 UART bridge
+            self._init_uart()
+            
             return True
         except Exception as e:
             print(f"Multimeter connection error: {e}")
             self.connected = False
             return False
+    
+    def _init_uart(self):
+        """Initialize CP2110 UART for communication with multimeter"""
+        if not self.device:
+            return
+        
+        # Enable UART (Report 0x41)
+        self.device.send_feature_report([0x41, 0x01])
+        
+        # Set UART config: 9600 baud, 8N1 (Report 0x50)
+        # Format: [ReportID, Baud(4 bytes BE), Parity, FlowCtrl, DataBits, StopBits]
+        config = [0x50, 0x00, 0x00, 0x25, 0x80, 0x00, 0x00, 0x03, 0x00]
+        self.device.send_feature_report(config)
+        
+        time.sleep(0.1)
+        
+        # Send initialization command to start data streaming
+        # Command from captured traffic: abcd040005010a00
+        init_cmd = bytes.fromhex("abcd040005010a00")
+        write_data = bytes([len(init_cmd)]) + init_cmd
+        self.device.write(write_data)
+        
+        time.sleep(0.2)
+        
+        # Flush initial response data
+        for _ in range(20):
+            self.device.read(64, 50)
+    
+    def _wake_up_device(self):
+        """Send wake-up sequence to initialize communication"""
+        if not self.device:
+            return
+            
+        # Flush any stale data in the buffer
+        for _ in range(5):
+            try:
+                self.device.read(64, 50)
+            except:
+                pass
+        
+        time.sleep(0.05)
+        
+        # Send GET_ID command to wake up the device
+        try:
+            self.device.write(b'\x00' + self.CMD_GET_ID)
+        except:
+            pass
+        
+        time.sleep(0.1)
+        
+        # Read and discard wake-up response, try multiple times
+        for _ in range(3):
+            try:
+                self.device.read(64, 100)
+            except:
+                pass
+        
+        time.sleep(0.05)
     
     def disconnect(self):
         """Disconnect from the multimeter"""
@@ -157,31 +218,65 @@ class UNIT_UT8804E:
         return self.connected and self.device is not None
     
     def _send_command(self, cmd: bytes) -> bool:
-        """Send a command to the multimeter"""
+        """Send a command to the multimeter via UART"""
         if not self.is_connected():
             return False
         try:
-            # HID report with report ID 0
-            self.device.write(b'\x00' + cmd)
+            # CP2110 UART write format: first byte is length (1-63), followed by data
+            write_data = bytes([len(cmd)]) + cmd
+            self.device.write(write_data)
             return True
         except Exception as e:
             print(f"Multimeter command error: {e}")
             return False
     
-    def _read_data(self, timeout_ms: int = 100) -> Optional[bytes]:
-        """Read data from the multimeter"""
+    def _read_data(self, timeout_ms: int = 500) -> Optional[bytes]:
+        """Read data from the multimeter, accumulating UART bytes"""
         if not self.is_connected():
             return None
         try:
-            data = self.device.read(64, timeout_ms)
-            return bytes(data) if data else None
+            # CP2110 returns data in chunks: first byte is count, rest is UART data
+            # We need to accumulate bytes to get a complete packet (at least 14 bytes)
+            result = bytearray()
+            deadline = time.time() + timeout_ms / 1000.0
+            
+            while time.time() < deadline:
+                data = self.device.read(64, 50)
+                if data:
+                    count = data[0]
+                    if 0 < count < 64:
+                        result.extend(data[1:count+1])
+                        # Check if we have a complete packet (starts with ABCD, need 14+ bytes)
+                        idx = result.find(b'\xab\xcd')
+                        if idx >= 0 and len(result) >= idx + 14:
+                            return bytes(result[idx:idx+20])
+            
+            # Try to return partial packet if we have enough data
+            if result:
+                idx = result.find(b'\xab\xcd')
+                if idx >= 0 and len(result) >= idx + 14:
+                    return bytes(result[idx:idx+20])
+            
+            return None
         except Exception as e:
             print(f"Multimeter read error: {e}")
             return None
     
     def _parse_reading(self, data: bytes) -> Optional[MultimeterReading]:
-        """Parse raw HID data into a reading"""
-        if not data or len(data) < 8:
+        """Parse raw HID data into a reading
+        
+        UT8804E packet structure (from reverse engineering):
+        [0-1]: Header 0xABCD
+        [2]: Packet type (0x21)
+        [3]: Unknown (0x00)
+        [4-5]: Mode/range info (0x02 0x08 for DC Voltage)
+        [6-7]: Flags (0x01 0x10)
+        [8-9]: More flags (0x31 0x01 or 0x31 0x02)
+        [10-13]: Main value as IEEE 754 float (little-endian, negated)
+        [14]: Range indicator
+        ...
+        """
+        if not data or len(data) < 14:
             return None
             
         try:
@@ -196,51 +291,62 @@ class UNIT_UT8804E:
                 else:
                     return None
             
-            if len(data) < 10:
+            if len(data) < 14:
                 return None
-                
-            # Packet structure (approximate, based on UT8803E):
-            # [0-1]: Header 0xABCD
-            # [2]: Packet type/length
-            # [3]: Mode byte
-            # [4-7]: Value (32-bit signed int, little-endian)
-            # [8]: Decimal point position
-            # [9]: Range/unit modifier
-            # [10]: Status flags
             
-            mode_byte = data[3] & 0x1F
-            mode_info = self.MODE_MAP.get(mode_byte, (MeasurementMode.UNKNOWN, ""))
-            mode = mode_info[0]
-            base_unit = mode_info[1]
+            # Extract mode from bytes 4-5
+            # UT8804E uses different mode encoding than UT8803E
+            # Observed: 0x02 0x08 = DC Voltage
+            mode_byte1 = data[4]
+            mode_byte2 = data[5]
             
-            # Extract value
-            if len(data) >= 8:
-                raw_value = struct.unpack('<i', data[4:8])[0]
+            # Map based on observed values
+            if mode_byte1 == 0x02 and mode_byte2 == 0x08:
+                mode = MeasurementMode.DC_VOLTAGE
+                base_unit = "V"
+            elif mode_byte1 == 0x02 and mode_byte2 == 0x00:
+                mode = MeasurementMode.DC_VOLTAGE
+                base_unit = "V"
+            elif mode_byte1 == 0x03:
+                mode = MeasurementMode.AC_VOLTAGE
+                base_unit = "V"
+            elif mode_byte1 == 0x04:
+                mode = MeasurementMode.DC_CURRENT_MA
+                base_unit = "mA"
+            elif mode_byte1 == 0x08:
+                mode = MeasurementMode.RESISTANCE
+                base_unit = "Ω"
             else:
-                raw_value = 0
-                
-            # Decimal position
-            decimal_pos = data[8] if len(data) > 8 else 0
-            if decimal_pos > 10:
-                decimal_pos = 4  # Default
-                
-            value = raw_value / (10 ** decimal_pos)
+                # Fallback to old mapping
+                mode_info = self.MODE_MAP.get(mode_byte1, (MeasurementMode.DC_VOLTAGE, "V"))
+                mode = mode_info[0]
+                base_unit = mode_info[1]
             
-            # Range/prefix
-            range_byte = data[9] if len(data) > 9 else 0
-            prefix = self.RANGE_PREFIX.get(range_byte & 0x0F, "")
-            unit = prefix + base_unit
+            # Extract value as float from bytes 10-13 (little-endian, negated)
+            raw_float = struct.unpack('<f', data[10:14])[0]
+            value = abs(raw_float)  # Value is stored as negative
             
-            # Status flags
-            flags = data[10] if len(data) > 10 else 0
-            overflow = (raw_value >= 59999 or raw_value <= -59999) or bool(flags & 0x01)
+            # Determine unit prefix based on range byte
+            range_byte = data[14] if len(data) > 14 else 0
+            prefix = ""
+            if mode == MeasurementMode.DC_VOLTAGE or mode == MeasurementMode.AC_VOLTAGE:
+                # Voltage mode - value is in volts
+                if value < 0.001:
+                    prefix = "m"
+                    value *= 1000
+            
+            unit = prefix + base_unit if base_unit else "V"
+            
+            # Status flags from byte 9
+            flags = data[9] if len(data) > 9 else 0
             hold = bool(flags & 0x02)
             relative = bool(flags & 0x04)
-            auto_range = bool(flags & 0x08) or not bool(flags & 0x10)
-            min_max = bool(flags & 0x20)
+            auto_range = True
+            min_max = False
+            overflow = value > 99999
             
             # Build range string
-            range_str = f"{prefix}{base_unit}" if prefix else base_unit
+            range_str = unit
             
             return MultimeterReading(
                 value=value,
@@ -253,7 +359,7 @@ class UNIT_UT8804E:
                 relative=relative,
                 auto_range=auto_range,
                 min_max=min_max,
-                raw_data=data[:16] if len(data) >= 16 else data
+                raw_data=data[:20] if len(data) >= 20 else data
             )
             
         except Exception as e:
