@@ -5,6 +5,10 @@ Option Explicit
 ' Calls Python functions via xlwings
 ' Import this module into your Excel workbook
 
+' ========== Module-level variables for auto-refresh ==========
+Private NextRefresh As Date
+Private RefreshActive As Boolean
+
 Sub ConnectPSU()
     Dim port As String
     port = Range("PSUPort").Value
@@ -12,7 +16,9 @@ Sub ConnectPSU()
         MsgBox "Please enter COM port (e.g., COM3)", vbExclamation
         Exit Sub
     End If
-    RunPython "from voltampero import get_controller; c=get_controller(); c.attach_excel(); c.connect_psu('" & port & "')"
+    ' Force new controller to avoid COM port conflicts, then connect
+    On Error Resume Next
+    RunPython "from voltampero import get_controller; import voltampero; voltampero._controller = None; c=get_controller(); c.attach_excel(); result=c.connect_psu('" & Trim(port) & "'); print(f'Connect result: {result}')"
 End Sub
 
 Sub ConnectDMM()
@@ -20,6 +26,7 @@ Sub ConnectDMM()
 End Sub
 
 Sub DisconnectAll()
+    On Error Resume Next
     RunPython "from voltampero import va_disconnect_all; va_disconnect_all()"
 End Sub
 
@@ -32,27 +39,59 @@ Sub OutputOff()
 End Sub
 
 Sub ApplySettings()
-    Dim voltage As Double, current As Double, ocp As Boolean
+    Dim voltage As Variant, current As Variant, ocp As Variant
+    Dim psuStatus As String
+    
     voltage = Range("SetVoltage").Value
     current = Range("SetCurrent").Value
     ocp = Range("OCPEnabled").Value
+    psuStatus = Range("PSUStatus").Value
     
-    RunPython "from voltampero import get_controller; c=get_controller(); c.set_voltage(" & voltage & "); c.set_current(" & current & "); c.set_ocp(" & IIf(ocp, "True", "False") & ")"
+    ' Validate inputs
+    If Not IsNumeric(voltage) Then
+        MsgBox "Voltage must be a number", vbExclamation
+        Exit Sub
+    End If
+    If Not IsNumeric(current) Then
+        MsgBox "Current must be a number", vbExclamation
+        Exit Sub
+    End If
+    
+    ' Check if PSU is connected
+    If psuStatus <> "Connected" Then
+        MsgBox "PSU is not connected! Please click 'Connect PSU' or 'Test (Simulated)' first.", vbExclamation, "PSU Not Connected"
+        Exit Sub
+    End If
+    
+    ' Apply settings with error handling
+    On Error GoTo ErrorHandler
+    RunPython "from voltampero import get_controller; c=get_controller(); c.attach_excel(); result_v=c.set_voltage(" & Replace(voltage, ",", ".") & "); result_a=c.set_current(" & Replace(current, ",", ".") & "); result_ocp=c.set_ocp(" & IIf(ocp, "True", "False") & "); print(f'Applied: V={result_v}, A={result_a}, OCP={result_ocp}')"
+    
+    ' Show success message
+    MsgBox "Settings applied: " & voltage & "V, " & current & "A, OCP=" & ocp, vbInformation, "Success"
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "Error applying settings: " & Err.Description, vbCritical, "Error"
 End Sub
 
 Sub StartLogging()
+    On Error Resume Next
     RunPython "from voltampero import va_start_logging; va_start_logging()"
 End Sub
 
 Sub StopLogging()
+    On Error Resume Next
     RunPython "from voltampero import va_stop_logging; va_stop_logging()"
 End Sub
 
 Sub StartRamp()
+    On Error Resume Next
     RunPython "from voltampero import va_start_ramp; va_start_ramp()"
 End Sub
 
 Sub StopRamp()
+    On Error Resume Next
     RunPython "from voltampero import va_stop_ramp; va_stop_ramp()"
 End Sub
 
@@ -69,30 +108,41 @@ Sub ClearData()
 End Sub
 
 Sub InitSimulated()
-    RunPython "from voltampero import va_init_simulated; va_init_simulated()"
+    ' Force new simulated controller
+    RunPython "import voltampero; voltampero._controller = None; from voltampero import va_init_simulated; va_init_simulated()"
     MsgBox "Simulated mode initialized. PSU and DMM connected.", vbInformation
 End Sub
 
 Sub RefreshReadings()
+    On Error Resume Next
     RunPython "from voltampero import get_controller; c=get_controller(); c.attach_excel(); r=c._capture_reading(); c._write_entry_to_excel(r) if r else None"
 End Sub
 
-' ========== Auto-refresh timer (optional) ==========
-Dim NextRefresh As Date
+' ========== Auto-refresh timer ==========
 
 Sub StartAutoRefresh()
-    NextRefresh = Now + TimeSerial(0, 0, 1)
-    Application.OnTime NextRefresh, "AutoRefreshTick"
+    On Error Resume Next
+    If Not RefreshActive Then
+        RefreshActive = True
+        NextRefresh = Now + TimeSerial(0, 0, 1)
+        Application.OnTime NextRefresh, "AutoRefreshTick"
+    End If
 End Sub
 
 Sub StopAutoRefresh()
     On Error Resume Next
+    RefreshActive = False
     Application.OnTime NextRefresh, "AutoRefreshTick", , False
 End Sub
 
 Sub AutoRefreshTick()
-    RefreshReadings
-    StartAutoRefresh
+    On Error Resume Next
+    If RefreshActive Then
+        RefreshReadings
+        ' Schedule next tick
+        NextRefresh = Now + TimeSerial(0, 0, 1)
+        Application.OnTime NextRefresh, "AutoRefreshTick"
+    End If
 End Sub
 
 ' ========== Sheet Setup Helper ==========
@@ -259,6 +309,71 @@ Sub CreateNamedRanges()
     wb.Names.Add Name:="ExportStatus", RefersTo:="=Control!$B$30"
     
     On Error GoTo 0
+End Sub
+
+Sub FixButtonAssignments()
+    ' Fix all button macro assignments
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Sheets("Control")
+    
+    Dim btn As Button
+    Dim fixed As Integer
+    fixed = 0
+    
+    On Error Resume Next
+    
+    ' Loop through all buttons and fix their assignments
+    For Each btn In ws.Buttons
+        Select Case btn.Caption
+            Case "Connect PSU"
+                btn.OnAction = "ConnectPSU"
+                fixed = fixed + 1
+            Case "Connect DMM"
+                btn.OnAction = "ConnectDMM"
+                fixed = fixed + 1
+            Case "Disconnect All"
+                btn.OnAction = "DisconnectAll"
+                fixed = fixed + 1
+            Case "Test (Simulated)"
+                btn.OnAction = "InitSimulated"
+                fixed = fixed + 1
+            Case "Output ON"
+                btn.OnAction = "OutputOn"
+                fixed = fixed + 1
+            Case "Output OFF"
+                btn.OnAction = "OutputOff"
+                fixed = fixed + 1
+            Case "Apply Settings"
+                btn.OnAction = "ApplySettings"
+                fixed = fixed + 1
+            Case "Start Logging"
+                btn.OnAction = "StartLogging"
+                fixed = fixed + 1
+            Case "Stop Logging"
+                btn.OnAction = "StopLogging"
+                fixed = fixed + 1
+            Case "Start Ramp"
+                btn.OnAction = "StartRamp"
+                fixed = fixed + 1
+            Case "Stop Ramp"
+                btn.OnAction = "StopRamp"
+                fixed = fixed + 1
+            Case "Pause Ramp"
+                btn.OnAction = "PauseRamp"
+                fixed = fixed + 1
+            Case "Export CSV"
+                btn.OnAction = "ExportCSV"
+                fixed = fixed + 1
+            Case "Clear Data"
+                btn.OnAction = "ClearData"
+                fixed = fixed + 1
+        End Select
+    Next btn
+    
+    On Error GoTo 0
+    
+    MsgBox "Fixed " & fixed & " button assignments!" & vbCrLf & vbCrLf & _
+           "Output ON and Output OFF buttons should work now.", vbInformation, "Success"
 End Sub
 
 Sub AddButtons()

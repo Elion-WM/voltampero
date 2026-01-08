@@ -7,6 +7,7 @@ Windows 11 compatible - no admin rights needed
 import serial
 import serial.tools.list_ports
 import time
+import threading
 from typing import Optional, Tuple, List
 from dataclasses import dataclass
 
@@ -33,6 +34,7 @@ class KoradKWR102:
         self.serial: Optional[serial.Serial] = None
         self._ocp_enabled = False
         self._ovp_enabled = False
+        self._serial_lock = threading.Lock()  # Thread-safe serial access
         
     @staticmethod
     def list_ports() -> List[str]:
@@ -55,7 +57,10 @@ class KoradKWR102:
                 stopbits=serial.STOPBITS_ONE,
                 timeout=self.timeout
             )
-            time.sleep(0.1)
+            # KWR102 needs RTS/DTR set
+            self.serial.setRTS(True)
+            self.serial.setDTR(True)
+            time.sleep(0.2)
             self.serial.reset_input_buffer()
             self.serial.reset_output_buffer()
             return True
@@ -76,35 +81,61 @@ class KoradKWR102:
         """Check if connected"""
         return self.serial is not None and self.serial.is_open
     
-    def _send_command(self, cmd: str) -> Optional[str]:
-        """Send command and optionally read response"""
+    def _send_command(self, cmd: str, fast: bool = False) -> Optional[str]:
+        """Send command and optionally read response (thread-safe)
+        
+        Args:
+            cmd: Command to send
+            fast: If True, uses minimal delay (for ramping)
+        """
         if not self.is_connected():
             return None
-        try:
-            self.serial.reset_input_buffer()
-            self.serial.write(cmd.encode('ascii'))
-            time.sleep(0.05)
-            if '?' in cmd:
-                response = self.serial.read(100).decode('ascii').strip()
-                return response
-            return ""
-        except Exception as e:
-            print(f"PSU command error: {e}")
-            return None
+        
+        with self._serial_lock:  # Ensure thread-safe access
+            try:
+                self.serial.reset_input_buffer()
+                # KWR102 requires \r (carriage return) terminator
+                self.serial.write((cmd + '\r').encode('ascii'))
+                
+                if '?' in cmd:
+                    # For queries, use shorter timeout to speed up logging
+                    old_timeout = self.serial.timeout
+                    self.serial.timeout = 0.1  # Fast timeout for queries
+                    time.sleep(0.02)  # Minimal delay for queries
+                    response = self.serial.read(100).decode('ascii').strip()
+                    self.serial.timeout = old_timeout
+                    return response
+                else:
+                    # For set commands
+                    if fast:
+                        time.sleep(0.01)  # Minimal delay for fast operations (ramp)
+                    else:
+                        time.sleep(0.1)  # Normal delay for regular operations
+                return ""
+            except Exception as e:
+                print(f"PSU command error: {e}")
+                return None
     
     def get_identification(self) -> str:
         """Get device identification string"""
         return self._send_command("*IDN?") or "Unknown"
     
-    def set_voltage(self, voltage: float) -> bool:
-        """Set output voltage (V)"""
+    def set_voltage(self, voltage: float, fast: bool = False) -> bool:
+        """Set output voltage (V)
+        
+        Args:
+            voltage: Voltage to set
+            fast: If True, uses minimal delay (for ramping)
+        """
         voltage = max(0, min(voltage, 60))  # Clamp to safe range
-        cmd = f"VSET1:{voltage:05.2f}"
-        return self._send_command(cmd) is not None
+        # KWR102 uses VSET: not VSET1:
+        cmd = f"VSET:{voltage:05.2f}"
+        return self._send_command(cmd, fast=fast) is not None
     
     def get_voltage_setpoint(self) -> float:
         """Get voltage setpoint (V)"""
-        response = self._send_command("VSET1?")
+        # KWR102 uses VSET? not VSET1?
+        response = self._send_command("VSET?")
         try:
             return float(response) if response else 0.0
         except ValueError:
@@ -112,7 +143,8 @@ class KoradKWR102:
     
     def get_output_voltage(self) -> float:
         """Get actual output voltage (V)"""
-        response = self._send_command("VOUT1?")
+        # KWR102 uses VOUT? not VOUT1?
+        response = self._send_command("VOUT?")
         try:
             return float(response) if response else 0.0
         except ValueError:
@@ -121,12 +153,14 @@ class KoradKWR102:
     def set_current(self, current: float) -> bool:
         """Set current limit (A)"""
         current = max(0, min(current, 30))  # Clamp to safe range
-        cmd = f"ISET1:{current:05.3f}"
+        # KWR102 uses ISET: not ISET1:
+        cmd = f"ISET:{current:05.3f}"
         return self._send_command(cmd) is not None
     
     def get_current_setpoint(self) -> float:
         """Get current setpoint (A)"""
-        response = self._send_command("ISET1?")
+        # KWR102 uses ISET? not ISET1?
+        response = self._send_command("ISET?")
         try:
             return float(response) if response else 0.0
         except ValueError:
@@ -134,7 +168,8 @@ class KoradKWR102:
     
     def get_output_current(self) -> float:
         """Get actual output current (A)"""
-        response = self._send_command("IOUT1?")
+        # KWR102 uses IOUT? not IOUT1?
+        response = self._send_command("IOUT?")
         try:
             return float(response) if response else 0.0
         except ValueError:
@@ -142,8 +177,17 @@ class KoradKWR102:
     
     def set_output(self, on: bool) -> bool:
         """Turn output on or off"""
-        cmd = "OUT1" if on else "OUT0"
-        return self._send_command(cmd) is not None
+        if on:
+            # KWR102 uses OUT:1 (WITH colon) for ON - consistent with OUT:0 for OFF
+            cmd = "OUT:1"
+        else:
+            # KWR102 uses OUT:0 (WITH colon) for OFF
+            cmd = "OUT:0"
+        
+        result = self._send_command(cmd) is not None
+        # Give PSU time to process output state change
+        time.sleep(0.3)
+        return result
     
     def output_on(self) -> bool:
         """Turn output on"""
@@ -171,18 +215,32 @@ class KoradKWR102:
     
     def get_status(self) -> PSUStatus:
         """Get full status of the power supply"""
-        status_response = self._send_command("STATUS?")
-        
+        # KWR102 STATUS? sometimes hangs, check output voltage instead
         output_on = False
         mode = "CV"
         
-        if status_response:
-            try:
-                status = ord(status_response[0]) if len(status_response) > 0 else 0
-                output_on = bool(status & 0x40)
-                mode = "CC" if (status & 0x01) else "CV"
-            except:
-                pass
+        # Try STATUS? with short timeout
+        try:
+            old_timeout = self.serial.timeout
+            self.serial.timeout = 0.3  # Short timeout
+            status_response = self._send_command("STATUS?")
+            self.serial.timeout = old_timeout
+            
+            if status_response:
+                try:
+                    status = ord(status_response[0]) if len(status_response) > 0 else 0
+                    output_on = bool(status & 0x40)
+                    mode = "CC" if (status & 0x01) else "CV"
+                except:
+                    pass
+        except:
+            pass
+        
+        # Fallback: check if output voltage > 0 to determine if output is on
+        if not output_on:
+            vout = self.get_output_voltage()
+            if vout > 0.1:  # If we read voltage, output is likely on
+                output_on = True
         
         return PSUStatus(
             voltage=self.get_output_voltage(),
@@ -283,7 +341,7 @@ class VoltageRamp:
         
     def _run_single_ramp(self, start_v: float, end_v: float, duration_s: float,
                          step_interval: float, current_cycle: int, total_cycles: int):
-        """Execute a single voltage ramp"""
+        """Execute a single voltage ramp with accurate timing"""
         if duration_s <= 0:
             self.psu.set_voltage(end_v)
             return
@@ -294,7 +352,18 @@ class VoltageRamp:
             
         voltage_step = (end_v - start_v) / steps
         self.current_voltage = start_v
-        self.psu.set_voltage(self.current_voltage)
+        
+        # Debug logging
+        import os
+        ramp_log = os.path.join(os.path.dirname(__file__), "ramp_debug.txt")
+        with open(ramp_log, "a") as f:
+            f.write(f"\n=== RAMP START ===\n")
+            f.write(f"Start: {start_v}V, End: {end_v}V, Duration: {duration_s}s\n")
+            f.write(f"Steps: {steps}, Step interval: {step_interval}s, Voltage step: {voltage_step:.6f}V\n")
+        
+        # Start timing from first voltage set
+        ramp_start_time = time.time()
+        self.psu.set_voltage(self.current_voltage, fast=True)
         
         for i in range(steps + 1):
             if not self.running:
@@ -304,15 +373,30 @@ class VoltageRamp:
                 time.sleep(0.1)
                 
             if i > 0:
-                time.sleep(step_interval)
+                # Calculate target time for this step
+                target_time = ramp_start_time + (i * step_interval)
+                
+                # Set next voltage with fast mode
                 self.current_voltage = start_v + (voltage_step * i)
                 self.current_voltage = round(self.current_voltage, 3)
-                self.psu.set_voltage(self.current_voltage)
+                cmd_start = time.time()
+                self.psu.set_voltage(self.current_voltage, fast=True)
+                cmd_duration = time.time() - cmd_start
+                
+                # Wait until target time (accounts for command overhead)
+                remaining = target_time - time.time()
+                if remaining > 0.001:  # Only wait if >1ms remains
+                    time.sleep(remaining)
             
             if self.progress_callback:
                 progress_pct = (i / steps) * 100
                 self.progress_callback(current_cycle, total_cycles, 
                                        self.current_voltage, progress_pct)
+        
+        # Debug: log completion
+        actual_duration = time.time() - ramp_start_time
+        with open(ramp_log, "a") as f:
+            f.write(f"RAMP COMPLETE: Final voltage: {self.current_voltage}V, Actual duration: {actual_duration:.1f}s\n")
                 
     def stop(self):
         """Stop the voltage ramp"""

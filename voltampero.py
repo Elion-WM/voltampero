@@ -116,22 +116,87 @@ class VoltAmpero:
     
     def set_voltage(self, voltage: float) -> bool:
         """Set PSU output voltage"""
+        # Ensure we're connected before setting
+        if not self.psu.is_connected():
+            # Try to reconnect using port from Excel
+            if hasattr(self, 'control_sheet') and self.control_sheet:
+                try:
+                    port = self.control_sheet.range("PSUPort").value
+                    if port:
+                        print(f"Auto-reconnecting PSU to {port}...")
+                        result = self.connect_psu(port)
+                        if not result:
+                            print(f"Failed to reconnect to {port}")
+                            return False
+                except Exception as e:
+                    print(f"Auto-reconnect error: {e}")
+                    return False
         return self.psu.set_voltage(voltage)
     
     def set_current(self, current: float) -> bool:
         """Set PSU current limit"""
+        # Ensure we're connected before setting
+        if not self.psu.is_connected():
+            # Try to reconnect using port from Excel
+            if hasattr(self, 'control_sheet') and self.control_sheet:
+                try:
+                    port = self.control_sheet.range("PSUPort").value
+                    if port:
+                        print(f"Auto-reconnecting PSU to {port}...")
+                        result = self.connect_psu(port)
+                        if not result:
+                            print(f"Failed to reconnect to {port}")
+                            return False
+                except Exception as e:
+                    print(f"Auto-reconnect error: {e}")
+                    return False
         return self.psu.set_current(current)
     
     def output_on(self) -> bool:
         """Turn PSU output on"""
+        # Ensure we're connected before setting
+        if not self.psu.is_connected():
+            # Try to reconnect using port from Excel
+            if hasattr(self, 'control_sheet') and self.control_sheet:
+                try:
+                    port = self.control_sheet.range("PSUPort").value
+                    if port:
+                        print(f"Auto-reconnecting PSU to {port}...")
+                        result = self.connect_psu(port)
+                        if not result:
+                            print(f"Failed to reconnect to {port}")
+                            return False
+                except Exception as e:
+                    print(f"Auto-reconnect error: {e}")
+                    return False
         return self.psu.output_on()
     
     def output_off(self) -> bool:
         """Turn PSU output off"""
+        # Ensure we're connected before setting
+        if not self.psu.is_connected():
+            # Try to reconnect using port from Excel
+            if hasattr(self, 'control_sheet') and self.control_sheet:
+                try:
+                    port = self.control_sheet.range("PSUPort").value
+                    if port:
+                        print(f"Auto-reconnecting PSU to {port}...")
+                        result = self.connect_psu(port)
+                        if not result:
+                            print(f"Failed to reconnect to {port}")
+                            return False
+                except Exception as e:
+                    print(f"Auto-reconnect error: {e}")
+                    return False
         return self.psu.output_off()
     
     def set_ocp(self, enabled: bool) -> bool:
         """Enable/disable Over Current Protection"""
+        if not self.psu.is_connected():
+            if hasattr(self, 'control_sheet'):
+                port = self.control_sheet.range("PSUPort").value
+                if port:
+                    self.connect_psu(port)
         return self.psu.set_ocp(enabled)
     
     def set_ovp(self, enabled: bool) -> bool:
@@ -222,20 +287,35 @@ class VoltAmpero:
         """Start data logging"""
         if self.logging_active:
             return
+        
+        # Minimum interval check - capture takes ~0.5s (4 queries × 0.12s each)
+        MIN_INTERVAL = 500  # 500ms minimum
+        if interval_ms < MIN_INTERVAL:
+            print(f"[WARN] Interval {interval_ms}ms too low, using minimum {MIN_INTERVAL}ms")
+            print(f"       (PSU queries take ~0.5s, minimum realistic interval is {MIN_INTERVAL}ms)")
+            interval_ms = MIN_INTERVAL
             
         self.log_interval_ms = interval_ms
+        print(f"Starting logging with interval: {interval_ms}ms ({interval_ms/1000}s)")
         self.log_data = []
         self.log_start_time = datetime.now()
         self._stop_logging.clear()
         self.logging_active = True
         self._excel_update_row = 2
         
-        # Clear previous data in Excel
+        # Clear previous data in Excel and write headers
         if self.data_sheet:
             try:
                 last_row = self.data_sheet.range("A1").end('down').row
                 if last_row > 1:
                     self.data_sheet.range(f"A2:I{last_row}").clear_contents()
+                
+                # Write headers
+                headers = [
+                    "Timestamp", "Elapsed (s)", "PSU Voltage (V)", "PSU Current (A)",
+                    "Set Voltage (V)", "Set Current (A)", "DMM Value", "DMM Unit", "DMM Mode"
+                ]
+                self.data_sheet.range("A1").value = headers
             except:
                 pass
         
@@ -253,17 +333,65 @@ class VoltAmpero:
     
     def _logging_loop(self):
         """Background logging loop"""
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+        except:
+            pass
+            
+        # Re-attach to Excel in this thread
+        wb = None
+        data_sheet = None
+        control_sheet = None
+        try:
+            if hasattr(self, 'wb_fullname') and self.wb_fullname:
+                 # We need to rely on name/path because COM object from main thread is invalid here
+                 wb = xw.Book(self.wb_fullname)
+                 data_sheet = wb.sheets["Data"]
+                 control_sheet = wb.sheets["Control"]
+        except Exception as e:
+            print(f"Thread Excel attach error: {e}")
+
+        loop_count = 0
+        last_time = time.time()
+        
         while not self._stop_logging.is_set():
             try:
+                loop_count += 1
+                loop_start = time.time()
+                
+                t1 = time.time()
                 entry = self._capture_reading()
+                t2 = time.time()
+                
                 if entry:
                     self.log_data.append(entry)
-                    self._write_entry_to_excel(entry)
+                    t3 = time.time()
+                    self._write_entry_to_excel(entry, data_sheet, control_sheet)
+                    t4 = time.time()
+                    
+                    # Calculate actual overhead (capture + excel write)
+                    overhead = t4 - loop_start
+                    
+                    # Debug timing - detailed breakdown
+                    if loop_count <= 5 or loop_count % 10 == 0:
+                        elapsed_since_last = time.time() - last_time
+                        capture_time = t2 - t1
+                        excel_time = t4 - t3
+                        import os
+                        log_file = os.path.join(os.path.dirname(__file__), "timing_debug.txt")
+                        with open(log_file, "a") as f:
+                            f.write(f"Loop {loop_count}: total={elapsed_since_last:.3f}s, overhead={overhead:.3f}s, capture={capture_time:.3f}s, excel={excel_time:.3f}s, setting={self.log_interval_ms}ms\n")
+                        last_time = time.time()
+                        
             except Exception as e:
                 print(f"Logging error: {e}")
+                overhead = 0
                 
-            # Wait for next interval
-            self._stop_logging.wait(self.log_interval_ms / 1000.0)
+            # Wait for remaining time to hit target interval
+            target_interval = self.log_interval_ms / 1000.0
+            wait_time = max(0.01, target_interval - overhead)  # Ensure at least 10ms wait
+            self._stop_logging.wait(wait_time)
     
     def _capture_reading(self) -> Optional[LogEntry]:
         """Capture a single reading from both devices"""
@@ -274,9 +402,16 @@ class VoltAmpero:
         psu_v, psu_a = 0.0, 0.0
         psu_set_v, psu_set_a = 0.0, 0.0
         if self.psu.is_connected():
-            psu_v, psu_a = self.psu.get_readings()
-            psu_set_v = self.psu.get_voltage_setpoint()
-            psu_set_a = self.psu.get_current_setpoint()
+            try:
+                psu_v, psu_a = self.psu.get_readings()
+                psu_set_v = self.psu.get_voltage_setpoint()
+                psu_set_a = self.psu.get_current_setpoint()
+            except Exception as e:
+                # Log error to file for debugging
+                import os
+                log_file = os.path.join(os.path.dirname(__file__), "capture_error.txt")
+                with open(log_file, "a") as f:
+                    f.write(f"{now}: Error reading PSU: {e}\n")
         
         # Read DMM
         dmm_val, dmm_unit, dmm_mode = 0.0, "", ""
@@ -299,13 +434,17 @@ class VoltAmpero:
             dmm_mode=dmm_mode
         )
     
-    def _write_entry_to_excel(self, entry: LogEntry):
+    def _write_entry_to_excel(self, entry: LogEntry, data_sheet=None, control_sheet=None):
         """Write a log entry to Excel"""
-        if not self.data_sheet:
+        # Use passed sheets if available (from thread), else self.sheets
+        sheet = data_sheet if data_sheet else self.data_sheet
+        ctrl_sheet = control_sheet if control_sheet else self.control_sheet
+
+        if not sheet:
             return
         try:
             row = self._excel_update_row
-            self.data_sheet.range(f"A{row}").value = [
+            sheet.range(f"A{row}").value = [
                 entry.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
                 entry.elapsed_s,
                 entry.psu_voltage,
@@ -319,10 +458,10 @@ class VoltAmpero:
             self._excel_update_row += 1
             
             # Update live display cells
-            if self.control_sheet:
-                self.control_sheet.range("LiveVoltage").value = entry.psu_voltage
-                self.control_sheet.range("LiveCurrent").value = entry.psu_current
-                self.control_sheet.range("LiveDMM").value = f"{entry.dmm_value:.4f} {entry.dmm_unit}"
+            if ctrl_sheet:
+                ctrl_sheet.range("LiveVoltage").value = entry.psu_voltage
+                ctrl_sheet.range("LiveCurrent").value = entry.psu_current
+                ctrl_sheet.range("LiveDMM").value = f"{entry.dmm_value:.4f} {entry.dmm_unit}"
         except Exception as e:
             print(f"Excel write error: {e}")
     
@@ -377,6 +516,8 @@ class VoltAmpero:
                 self.wb = workbook
             else:
                 self.wb = xw.Book.caller()
+            
+            self.wb_fullname = self.wb.fullname
                 
             # Get sheets
             self.control_sheet = self.wb.sheets["Control"]
@@ -398,11 +539,57 @@ class VoltAmpero:
 # ========== Global Instance ==========
 _controller: Optional[VoltAmpero] = None
 
-def get_controller(simulate: bool = False) -> VoltAmpero:
-    """Get or create the global controller instance"""
+def get_controller(simulate: bool = False, force_new: bool = False) -> VoltAmpero:
+    """Get or create the global controller instance
+    
+    Auto-reconnects based on Excel status if needed.
+    
+    Args:
+        simulate: Create simulated controller
+        force_new: Force creation of new controller (resets global instance)
+    """
     global _controller
+    
+    # Force new controller if requested
+    if force_new and _controller is not None:
+        _controller.disconnect_all()
+        _controller = None
+    
     if _controller is None:
         _controller = VoltAmpero(simulate=simulate)
+        
+        # Auto-attach Excel and check if we should reconnect
+        if XLWINGS_AVAILABLE:
+            try:
+                _controller.attach_excel()
+                
+                # Check PSU status in Excel to see if we should reconnect
+                psu_status = _controller.control_sheet.range("PSUStatus").value
+                dmm_status = _controller.control_sheet.range("DMMStatus").value
+                
+                # If Excel says we're connected, reconnect automatically
+                if psu_status == "Connected":
+                    # Check PSU port - if it's SIM1, we're in simulated mode
+                    psu_port = _controller.control_sheet.range("PSUPort").value
+                    if psu_port and "SIM" in str(psu_port).upper():
+                        # Reconnect simulated PSU
+                        _controller = VoltAmpero(simulate=True)
+                        _controller.attach_excel()
+                        _controller.connect_psu("SIM1")
+                        _controller.connect_dmm()
+                    elif psu_port:
+                        # Reconnect real PSU - only if not already connected
+                        if not _controller.psu.is_connected():
+                            result = _controller.connect_psu(psu_port)
+                            if not result:
+                                # Connection failed, clear status in Excel
+                                _controller.control_sheet.range("PSUStatus").value = "Disconnected"
+                        if dmm_status == "Connected" and not _controller.dmm.is_connected():
+                            _controller.connect_dmm()
+            except Exception as e:
+                print(f"Auto-reconnect error: {e}")
+                pass  # If Excel not available or error, just use fresh controller
+    
     return _controller
 
 
@@ -468,14 +655,63 @@ if XLWINGS_AVAILABLE:
     @xw.sub
     def va_output_on():
         """Turn PSU output on"""
-        ctrl = get_controller()
-        ctrl.output_on()
+        import os
+        import datetime
+        
+        # Write to log file
+        log_file = os.path.join(os.path.dirname(__file__), "debug_log.txt")
+        with open(log_file, "a") as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"{datetime.datetime.now()}: va_output_on() called\n")
+            
+            try:
+                ctrl = get_controller()
+                f.write(f"Controller obtained: {ctrl}\n")
+                f.write(f"PSU type: {type(ctrl.psu).__name__}\n")
+                f.write(f"PSU connected: {ctrl.psu.is_connected()}\n")
+                
+                ctrl.attach_excel()
+                f.write(f"Excel attached: {ctrl.control_sheet is not None}\n")
+                
+                if ctrl.psu.is_connected():
+                    f.write("PSU is connected, calling output_on()...\n")
+                    result = ctrl.output_on()
+                    f.write(f"output_on() returned: {result}\n")
+                else:
+                    f.write("ERROR: PSU is NOT connected!\n")
+                    if ctrl.control_sheet:
+                        port = ctrl.control_sheet.range("PSUPort").value
+                        f.write(f"Port from Excel: {port}\n")
+                    result = ctrl.output_on()
+                    f.write(f"output_on() after reconnect returned: {result}\n")
+            except Exception as e:
+                f.write(f"EXCEPTION: {e}\n")
+                import traceback
+                f.write(traceback.format_exc())
     
     @xw.sub
     def va_output_off():
         """Turn PSU output off"""
-        ctrl = get_controller()
-        ctrl.output_off()
+        import os
+        import datetime
+        
+        # Write to log file
+        log_file = os.path.join(os.path.dirname(__file__), "debug_log.txt")
+        with open(log_file, "a") as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"{datetime.datetime.now()}: va_output_off() called\n")
+            
+            try:
+                ctrl = get_controller()
+                f.write(f"PSU connected: {ctrl.psu.is_connected()}\n")
+                
+                ctrl.attach_excel()
+                result = ctrl.output_off()
+                f.write(f"output_off() returned: {result}\n")
+            except Exception as e:
+                f.write(f"EXCEPTION: {e}\n")
+                import traceback
+                f.write(traceback.format_exc())
     
     @xw.sub
     def va_set_ocp(enabled: bool):
@@ -565,6 +801,8 @@ if XLWINGS_AVAILABLE:
         global _controller
         _controller = VoltAmpero(simulate=True)
         _controller.attach_excel()
+        # Set PSU port in Excel so auto-reconnect knows we're simulated
+        _controller.control_sheet.range("PSUPort").value = "SIM1"
         _controller.connect_psu("SIM1")
         _controller.connect_dmm()
 
